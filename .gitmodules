@@ -1,0 +1,3 @@
+[submodule "weatherbox_common"]
+	path = weatherbox_common
+	url = https://github.com/Elizafox/weatherbox_common.git

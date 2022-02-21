@@ -32,7 +32,7 @@ static const level_deg level_deg_table[] = {
 
 // Defined for a 3.3 volt board
 static const level_deg level_deg_table[] = {
-  {79, 270},
+  {79,  270},
   {137, 315},
   {196, 292.5},
   {238, 0},

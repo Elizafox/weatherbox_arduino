@@ -27,23 +27,23 @@ RTC_DS1307 rtc;
 Weather w;
 
 // Anenometer counter
-volatile unsigned long counter_anen = 0;
-float last_anen_measurement = 0;
-unsigned long last_anen_time = millis();
+static volatile unsigned long counter_anen = 0;
+static float last_anen_measurement = 0;
+static unsigned long last_anen_time = millis();
 
 // Rain gauge counter
-volatile unsigned long gauge_counter = 0;
-float last_gauge_measurement = 0;
-unsigned long last_gauge_time = millis();
+static volatile unsigned long gauge_counter = 0;
+static float last_gauge_measurement = 0;
+static unsigned long last_gauge_time = millis();
 
 // RTC
-unsigned long last_rtc_adjust_time = 0;
+static unsigned long last_rtc_adjust_time = 0;
 
 // Debounce
-volatile unsigned long last_debounce_gauge_time = 0;
-const unsigned long debounce_gauge_delay = 50;
-volatile unsigned long last_debounce_anen_time = 0;
-const unsigned long debounce_anen_delay = 25;
+static volatile unsigned long last_debounce_gauge_time = 0;
+static const unsigned long debounce_gauge_delay = 50;
+static volatile unsigned long last_debounce_anen_time = 0;
+static const unsigned long debounce_anen_delay = 25;
 
 // Interrupt handlers
 void int_anen();

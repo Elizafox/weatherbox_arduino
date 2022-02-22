@@ -258,7 +258,6 @@ bool check_iaq_sensor_status()
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial);
 
   int rtn;
   rtn = I2C_clear_bus(); // clear the I2C bus first before calling Wire.begin()
@@ -271,9 +270,9 @@ void setup() {
     } else if (rtn == 3) {
       Serial.println(F("SDA data line held low"));
     }
+    while (true);
   }
   else { // bus clear
-    // re-enable Wire
     // now can start Wire Arduino master
     Wire.begin();
   }

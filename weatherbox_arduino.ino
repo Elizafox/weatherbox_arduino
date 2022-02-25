@@ -1,69 +1,75 @@
-#include <mbed.h>
-#include <rtos.h>
-#include <mbed_wait_api.h>
+#include <WiFiNINA.h>
+#include <WiFiUdp.h>
 #include <Wire.h>
+#include <time.h>
+#include <NTPClient.h>
 #include <Adafruit_SI1145.h>
 #include <Adafruit_GPS.h>
-#include <RTClib.h>
+#include <ArduinoJson.h>
 #include <bsec.h>
+#include <MDNS_Generic.h>
+#include <RTClib.h>
 
 #include "level_deg_table.h"
-#include "weatherbox_common/weather.h"
-#include "weatherbox_common/common.h"
+#include "favicon.h"
+#include "secrets.h"
+#include "weather.h"
 
 // Pin assignments
 static const int PIN_WVANE = A0;
 static const int PIN_ANEN = 2;
 static const int PIN_GAUGE = 3;
 
-// Serial port of the GPS
-#define GPSSerial Serial1
-
+// Sensors
 Adafruit_SI1145 uv = Adafruit_SI1145();
-Adafruit_GPS GPS(&GPSSerial);
 Bsec iaq_sensor;
-RTC_DS1307 rtc;
+RTC_Millis rtc;
 
-Weather w;
+// Weather structure
+static Weather w;
+
+// WiFi
+static int status = WL_IDLE_STATUS;
+WiFiServer server(80);
+
+// NTP
+WiFiUDP ntp_udp;
+NTPClient time_client(ntp_udp);
+unsigned long ntp_previous_time = 0;
+
+// Web server
+static const unsigned long refresh_rate = 60;
+const long ws_timeout_time = 1000;
+
+// mDNS
+WiFiUDP mdns_udp;
+MDNS mdns(mdns_udp);
+
+// Readings timers
+unsigned long reading_previous_time = 0;
 
 // Anenometer counter
 static volatile unsigned long counter_anen = 0;
+static unsigned long last_anen_time = 0;
 static float last_anen_measurement = 0;
-static unsigned long last_anen_time = millis();
 
 // Rain gauge counter
-static volatile unsigned long gauge_counter = 0;
+static volatile unsigned long counter_gauge = 0;
+static unsigned long last_gauge_time = 0;
 static float last_gauge_measurement = 0;
-static unsigned long last_gauge_time = millis();
-
-// RTC
-static unsigned long last_rtc_adjust_time = 0;
-
-// Debounce
-static volatile unsigned long last_debounce_gauge_time = 0;
-static const unsigned long debounce_gauge_delay = 50;
-static volatile unsigned long last_debounce_anen_time = 0;
-static const unsigned long debounce_anen_delay = 25;
 
 // Interrupt handlers
 void int_anen();
 void int_gauge();
 void request_event();
 
-// Tasks
-void task_gps();
-void task_readings();
-rtos::Thread thread_gps;
-rtos::Thread thread_readings;
-rtos::Semaphore sem_gps(1);
-
 
 // Routine to unstick the bus
 // Taken from https://www.forward.com.au/pfod/ArduinoProgramming/I2C_clear_bus/
 int I2C_clear_bus() {
   Wire.end();
-  int PIN_SDA = I2C_SDA;
-  int PIN_SCL = I2C_SCL;
+  int PIN_SDA = SDA;
+  int PIN_SCL = SCL;
 
 #if defined(TWCR) && defined(TWEN)
   TWCR &= ~(_BV(TWEN)); //Disable the Atmel 2-Wire interface so we can control the SDA and SCL pins directly
@@ -208,8 +214,8 @@ inline float get_rainfall() {
 
   noInterrupts();
   float mm;
-  mm = (gauge_counter / delta) * mm_per_empty;
-  gauge_counter = 0;
+  mm = (counter_gauge / delta) * mm_per_empty;
+  counter_gauge = 0;
   interrupts();
 
   last_gauge_measurement = mm;
@@ -256,6 +262,253 @@ bool check_iaq_sensor_status()
   return true;
 }
 
+int day_of_week(int year, int month, int day) { // 1 <= m <= 12, y > 1752 (in the U.K.)
+  static int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+  if (month < 3) {
+    year -= 1;
+  }
+  return (year + year / 4 - year / 100 + year / 400 + t[month - 1] + day) % 7;
+}
+
+void client_send_style(WiFiClient& client) {
+  // Feel free to change the background-color and font-size attributes to fit your preferences
+  client.println(F("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"));
+  client.println(F("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}"));
+  client.println(F("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}"));
+  client.println(F("</style>"));
+}
+
+// Send a 400 response to a client
+void client_send_400(WiFiClient& client) {
+  client.println(F("HTTP/1.1 400 Bad Request"));
+  client.println(F("Content-Type: text/html"));
+  client.println(F("Cache-Control: no-cache"));
+  client.println(F("Connection: close"));
+  client.println();
+
+  // Display the HTML web page
+  client.println(F("<!DOCTYPE html><html>"));
+
+  client_send_style(client);
+
+  // Web Page Heading
+  client.println(F("<body><h1>400</h1>"));
+  client.println(F("<p>Bad request. How naughty~.</p>"));
+  client.println(F("</body></html>"));
+
+  // The client response ends with another blank line
+  client.println();
+}
+
+// Send a 404 response to a client
+void client_send_404(WiFiClient& client) {
+  client.println(F("HTTP/1.1 404 Not Found"));
+  client.println(F("Content-Type: text/html"));
+  client.println(F("Cache-Control: no-cache"));
+  client.println(F("Connection: close"));
+  client.println();
+
+  // Display the HTML web page
+  client.println(F("<!DOCTYPE html><html>"));
+
+  client_send_style(client);
+
+  // Web Page Heading
+  client.println(F("<body><h1>404</h1>"));
+  client.println(F("<p>Not found</p>"));
+  client.println(F("</body></html>"));
+
+  // The client response ends with another blank line
+  client.println();
+}
+
+// Send a webpage with the current weather
+void client_send_weather_page(WiFiClient& client) {
+  // Send back response headers; tell the client to refresh every so often
+  client.println(F("HTTP/1.1 200 OK"));
+  client.println(F("Content-type: text/html"));
+  client.println(F("Cache-Control: no-cache"));
+  client.print(F("Refresh: ")); client.println(refresh_rate);
+  client.println(F("Connection: close"));
+  client.println();
+
+  // Display the HTML web page
+  client.println(F("<!DOCTYPE html><html>"));
+  client.println(F("<head>"));
+
+  client_send_style(client);
+
+  // Web Page Heading
+  client.println(F("<body><h1>Weather data</h1>"));
+
+  client.print(F("<p>Time: "));
+  struct tm t = {
+    .tm_sec = w.get_second(),
+    .tm_min = w.get_minute(),
+    .tm_hour = w.get_hour(),
+    .tm_mday = w.get_day(),
+    .tm_mon = w.get_month() - 1,
+    .tm_year = w.get_year() - 1900,
+    .tm_wday = day_of_week(w.get_year(), w.get_month(), w.get_day()),
+    .tm_yday = -1,
+    .tm_isdst = -1
+  };
+  client.print(asctime(&t)); client.println(F("</p>"));
+  client.print(F("<p>Temp: ")); client.print(w.get_temperature()); client.println(F("&deg;C</p>"));
+  client.print(F("<p>Humidity: ")); client.print(w.get_humidity()); client.println(F("%</p>"));
+  client.print(F("<p>Pressure: ")); client.print(w.get_pressure()); client.println(F("hPa</p>"));
+  client.print(F("<p>Wind: ")); client.print(w.get_wind()); client.print(F("KPH, direction "));
+  client.print(w.get_wind_direction()); client.println(F("&deg;</p>"));
+  client.print(F("<p>UV index: ")); client.print(w.get_uv()); client.println(F("</p>"));
+  client.print(F("<p>Visible light: ")); client.print(w.get_visible_light()); client.println(F("</p>"));
+  client.print(F("<p>IR light: ")); client.print(w.get_ir()); client.println(F("</p>"));
+  client.print(F("<p>AQI: ")); client.print(w.get_aqi()); client.println(F("</p>"));
+  client.print(F("<p>CO2 equivalent: ")); client.print(w.get_co2e()); client.println(F("</p>"));
+  client.print(F("<p>VOC breath equivalent: ")); client.print(w.get_co2e()); client.println(F("</p>"));
+  client.print(F("<p>Rainfall per hour: ")); client.print(w.get_rainfall_per_hour()); client.println(F("</p>"));
+
+  client.println(F("</body></html>"));
+
+  // The HTTP response ends with another blank line
+  client.println();
+}
+
+// Send JSON data
+void client_send_api(WiFiClient& client) {
+  String data;
+  w.to_json(data);
+
+  // Send back response headers; tell the client to refresh every so often
+  client.println(F("HTTP/1.1 200 OK"));
+  client.println(F("Content-Type: application/json"));
+  client.println(F("Cache-Control: no-cache"));
+  client.print(F("Refresh: ")); client.println(refresh_rate);
+  client.println(F("Connection: close"));
+  client.println();
+  client.print(data);
+  client.println();
+}
+
+void client_send_favicon(WiFiClient& client) {
+  // Send back response headers
+  client.println(F("HTTP/1.1 200 OK"));
+  client.println(F("Content-Type: image/png"));
+  client.print(F("Content-Length: ")); client.println(favicon_size);
+  client.println(F("Cache-Control: public,max-age=31536000,immutable"));
+  client.println(F("Connection: close"));
+  client.println();
+
+  // Send the icon
+  client.write(favicon, favicon_size);
+  client.println();
+}
+
+// Route the client's GET request
+void route_client(WiFiClient& client, String& path) {
+  if (path == "/api")
+    client_send_api(client);
+  else if (path == "/")
+    client_send_weather_page(client);
+  else if (path == "/favicon.ico")
+    client_send_favicon(client);
+  else
+    client_send_404(client);
+}
+
+void handle_web_client(WiFiClient& client) {
+  unsigned long current_time = millis();
+  unsigned long previous_time = current_time;
+  String header = "";
+  String current_line = "";
+
+  Serial.print("New Client: ");
+  Serial.println(client.remoteIP());
+
+  while (client.connected() && (current_time - previous_time < ws_timeout_time)) {
+    current_time = millis();
+    if (client.available()) {
+      char c = client.read();
+      Serial.write(c);
+      header += c;
+      if (c == '\n') {
+        // if the current line is blank, you got two newline characters in a row.
+        // that's the end of the client HTTP request, so send a response
+        if (current_line.length() == 0) {
+          // We only care about GET requests
+          int request_type_pos = header.indexOf("GET");
+          if (request_type_pos < 0) {
+            // Bad request
+            client_send_400(client);
+          }
+          else {
+            // We have a valid request, advance to the position of the path
+            request_type_pos += 4;
+            // Now at the page path.
+            // Everything to the next space is the path
+            int path_end_pos = header.indexOf(" ", request_type_pos);
+            if (path_end_pos < 0) {
+              client_send_400(client);
+              break;
+            }
+
+            // Route to the correct path
+            String path = header.substring(request_type_pos, path_end_pos);
+            route_client(client, path);
+          }
+          // Break out of the while loop
+          break;
+        }
+        else {
+          current_line = "";
+        }
+      }
+      else if (c != '\r') {  // if you got anything else but a carriage return character,
+        current_line += c;   // add it to the end of the current_line
+      }
+    }
+  }
+
+  client.stop();
+  Serial.println("Client disconnected.");
+}
+
+void handle_readings() {
+  DateTime now = rtc.now();
+  Serial.println("Taking readings");
+
+  w.set_hour(now.hour());
+  w.set_minute(now.minute());
+  w.set_second(now.second());
+  w.set_day(now.day());
+  w.set_month(now.month());
+  w.set_year(now.year());
+
+  w.set_uv(uv.readUV() / 100.0);
+  w.set_visible_light(uv.readVisible());
+  w.set_ir(uv.readIR());
+
+  if (!iaq_sensor.run()) {
+    check_iaq_sensor_status();
+  }
+  else {
+    w.set_temperature(iaq_sensor.temperature);
+    w.set_pressure(iaq_sensor.pressure / 100.0);
+    w.set_humidity(iaq_sensor.humidity);
+    w.set_aqi(iaq_sensor.staticIaq);
+    w.set_co2e(iaq_sensor.co2Equivalent);
+    w.set_breath_voce(iaq_sensor.breathVocEquivalent);
+  }
+
+  w.set_wind(get_wind_speed());
+  w.set_wind_direction(get_vane());
+
+  if (now.minute() == 0) {
+    w.set_rainfall_per_hour(get_rainfall());
+  }
+
+  Serial.println("Readings finished");
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -277,9 +530,11 @@ void setup() {
     Wire.begin();
   }
 
-  rtc.begin();
-  if (!rtc.isrunning()) {
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  rtc.begin(DateTime(F(__DATE__), F(__TIME__)));
+
+  if (!uv.begin()) {
+    Serial.println(F("Didn't find Si1145 :("));
+    while (true);
   }
 
   iaq_sensor.begin(BME680_I2C_ADDR_SECONDARY, Wire);
@@ -296,17 +551,8 @@ void setup() {
     BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
     BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY,
   };
-  iaq_sensor.updateSubscription(sensor_list, 10, BSEC_SAMPLE_RATE_LP);
+  iaq_sensor.updateSubscription(sensor_list, 10, BSEC_SAMPLE_RATE_ULP);
   check_iaq_sensor_status();
-
-  if (!uv.begin()) {
-    Serial.println(F("Didn't find Si1145 :("));
-    while (true);
-  }
-
-  GPS.begin(9600);
-  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
-  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_100_MILLIHERTZ);  // once every 10 seconds
 
   // Set up gauge inputs
   pinMode(PIN_WVANE, INPUT);
@@ -315,117 +561,71 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_ANEN), int_anen, RISING);
   attachInterrupt(digitalPinToInterrupt(PIN_GAUGE), int_gauge, CHANGE);
 
-  thread_gps.start(task_gps);
-  thread_readings.start(task_readings);
+  while (status != WL_CONNECTED) {
+    Serial.print("Attempting to connect to Network named: ");
+    Serial.println(ssid);
+
+    WiFi.setHostname(hostname);
+    status = WiFi.begin(const_cast<char*>(ssid), password);
+    // wait 10 seconds for connection:
+    delay(10000);
+  }
+
+  server.begin();
+  time_client.begin();
+  time_client.update();
+
+  mdns.begin(WiFi.localIP(), hostname);
+  mdns.addServiceRecord("Weatherbox._http", 80, MDNSServiceTCP);
+
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+
+  // print your board's IP address:
+  IPAddress ip = WiFi.localIP();
+  Serial.print("IP Address: ");
+  Serial.println(ip);
+
+  // print the received signal strength:
+  long rssi = WiFi.RSSI();
+  Serial.print("signal strength (RSSI): ");
+  Serial.print(rssi);
+  Serial.println(" dBm");
 
   Serial.println(F("Weatherbox is starting..."));
 }
 
-void task_gps() {
-  while (true) {
-    sem_gps.acquire();
-    GPS.read();
-    if (GPS.newNMEAreceived()) {
-      GPS.parse(GPS.lastNMEA());
-    }
-    sem_gps.release();
-  }
-}
-
-void task_readings() {
-  while (true) {
-    DateTime now = rtc.now();
-    while (now.second() != 0) {
-      now = rtc.now();
-      delay(200);
-    }
-
-    w.set_hour(now.hour());
-    w.set_minute(now.minute());
-    w.set_second(now.second());
-    sem_gps.acquire();
-    w.set_msec(GPS.milliseconds);
-    sem_gps.release();
-    w.set_day(now.day());
-    w.set_month(now.month());
-    w.set_year(now.year());
-
-    Serial.println(F("Taking readings"));
-
-    w.set_uv(uv.readUV() / 100.0);
-
-    if (!iaq_sensor.run()) {
-      check_iaq_sensor_status();
-    }
-    else {
-      w.set_temperature(iaq_sensor.temperature);
-      w.set_pressure(iaq_sensor.pressure / 100.0);
-      w.set_humidity(iaq_sensor.humidity);
-      w.set_aqi(iaq_sensor.staticIaq);
-      w.set_co2e(iaq_sensor.co2Equivalent);
-      w.set_breath_voce(iaq_sensor.breathVocEquivalent);
-    }
-
-    w.set_wind(get_wind_speed());
-    w.set_wind_direction(get_vane());
-
-    sem_gps.acquire();
-    if (GPS.year > 0 && (last_rtc_adjust_time == 0 ||
-                         (millis() - last_rtc_adjust_time) > 3600000)) {
-      // Adjust RTC
-      last_rtc_adjust_time = millis();
-      rtc.adjust(DateTime(GPS.year + 2000, GPS.month, GPS.day,
-                          GPS.hour, GPS.minute, GPS.seconds));
-    }
-    sem_gps.release();
-
-    if (now.minute() == 0) {
-      w.set_rainfall_per_hour(get_rainfall());
-    }
-
-    Serial.println(F("-----------------------"));
-    Serial.println(F("Readings:\n"));
-    Serial.print(F("Temperature: "));       Serial.println(w.get_temperature());
-    Serial.print(F("Humidity: "));          Serial.println(w.get_humidity());
-    Serial.print(F("Pressure: "));          Serial.println(w.get_pressure());
-    Serial.print(F("Rainfall: "));          Serial.println(w.get_rainfall_per_hour());
-    Serial.print(F("Wind: "));              Serial.println(w.get_wind());
-    Serial.print(F("Wind direction: "));    Serial.println(w.get_wind_direction());
-    Serial.print(F("UV index: "));          Serial.println(w.get_uv());
-    Serial.print(F("AQI: "));               Serial.println(w.get_aqi());
-    Serial.print(F("CO2 equiv.: "));        Serial.println(w.get_co2e());
-    Serial.print(F("Breath VOC equiv.: ")); Serial.println(w.get_breath_voce());
-    Serial.println(F("-----------------------"));
-
-    Serial.println(F("Transferring data..."));
-    Wire.beginTransmission(I2C_ADDRESS_ESP32);
-    Wire.write(w.to_data(), w.packet_size);
-    Wire.endTransmission();
-    Serial.println(F("Done~"));
-
-    delay(60000);
-  }
-}
-
 void loop() {
-  // Nothing
-  delay(100000);
+  unsigned long current_time = millis();
+
+  mdns.run();
+  time_client.update();
+
+  if (ntp_previous_time == 0 || current_time - ntp_previous_time >= 60000) {
+    ntp_previous_time = current_time;
+    rtc.adjust(DateTime(time_client.getEpochTime()));
+  }
+
+  DateTime now = rtc.now();
+  if (now.second() == 0 && (reading_previous_time == 0 || current_time - reading_previous_time >= 60000)) {
+    reading_previous_time = current_time;
+    handle_readings();
+  }
+
+  WiFiClient client = server.available();  // Listen for incoming clients
+  if (client) {
+    Serial.println("Handling web client!");
+    handle_web_client(client);
+    Serial.println("Done handling web client!");
+  }
+
+  delay(10);
 }
 
 void int_anen() {
-  unsigned long current_time = millis();
-  if (current_time - last_debounce_anen_time > debounce_anen_delay) {
-    counter_anen++;
-  }
-
-  last_debounce_anen_time = current_time;
+  counter_anen++;
 }
 
 void int_gauge() {
-  unsigned long current_time = millis();
-  if (current_time - last_debounce_gauge_time > debounce_gauge_delay) {
-    gauge_counter++;
-  }
-
-  last_debounce_gauge_time = current_time;
+  counter_gauge++;
 }

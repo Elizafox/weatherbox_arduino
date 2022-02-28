@@ -404,11 +404,11 @@ void client_send_favicon(WiFiClient& client) {
 
 // Route the client's GET request
 void route_client(WiFiClient& client, String& path) {
-  if (path == "/api")
+  if (path == F("/api"))
     client_send_api(client);
-  else if (path == "/")
+  else if (path == F("/"))
     client_send_weather_page(client);
-  else if (path == "/favicon.ico")
+  else if (path == F("/favicon.ico"))
     client_send_favicon(client);
   else
     client_send_404(client);
@@ -420,7 +420,7 @@ void handle_web_client(WiFiClient& client) {
   String header = "";
   String current_line = "";
 
-  Serial.print("New Client: ");
+  Serial.print(F("New Client: "));
   Serial.println(client.remoteIP());
 
   while (client.connected() && (current_time - previous_time < ws_timeout_time)) {
@@ -434,7 +434,7 @@ void handle_web_client(WiFiClient& client) {
         // that's the end of the client HTTP request, so send a response
         if (current_line.length() == 0) {
           // We only care about GET requests
-          int request_type_pos = header.indexOf("GET");
+          int request_type_pos = header.indexOf(F("GET"));
           if (request_type_pos < 0) {
             // Bad request
             client_send_400(client);
@@ -468,12 +468,12 @@ void handle_web_client(WiFiClient& client) {
   }
 
   client.stop();
-  Serial.println("Client disconnected.");
+  Serial.println(F("Client disconnected."));
 }
 
 void handle_readings() {
   DateTime now = rtc.now();
-  Serial.println("Taking readings");
+  Serial.println(F("Taking readings"));
 
   w.set_hour(now.hour());
   w.set_minute(now.minute());
@@ -505,7 +505,7 @@ void handle_readings() {
     w.set_rainfall_per_hour(get_rainfall());
   }
 
-  Serial.println("Readings finished");
+  Serial.println(F("Readings finished"));
 }
 
 void setup() {
@@ -561,7 +561,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(PIN_GAUGE), int_gauge, CHANGE);
 
   while (status != WL_CONNECTED) {
-    Serial.print("Attempting to connect to Network named: ");
+    Serial.print(F("Attempting to connect to Network named: "));
     Serial.println(ssid);
 
     WiFi.setHostname(hostname);
@@ -575,21 +575,21 @@ void setup() {
   time_client.update();
 
   mdns.begin(WiFi.localIP(), hostname);
-  mdns.addServiceRecord("Weatherbox._http", 80, MDNSServiceTCP);
+  mdns.addServiceRecord(F("Weatherbox._http"), 80, MDNSServiceTCP);
 
-  Serial.print("SSID: ");
+  Serial.print(F("SSID: "));
   Serial.println(WiFi.SSID());
 
   // print your board's IP address:
   IPAddress ip = WiFi.localIP();
-  Serial.print("IP Address: ");
+  Serial.print(F("IP Address: "));
   Serial.println(ip);
 
   // print the received signal strength:
   long rssi = WiFi.RSSI();
-  Serial.print("signal strength (RSSI): ");
+  Serial.print(F("signal strength (RSSI): "));
   Serial.print(rssi);
-  Serial.println(" dBm");
+  Serial.println(F(" dBm"));
 
   Serial.println(F("Weatherbox is starting..."));
 }
@@ -613,9 +613,9 @@ void loop() {
 
   WiFiClient client = server.available();  // Listen for incoming clients
   if (client) {
-    Serial.println("Handling web client!");
+    Serial.println(F("Handling web client!"));
     handle_web_client(client);
-    Serial.println("Done handling web client!");
+    Serial.println(F("Done handling web client!"));
   }
 
   delay(10);

@@ -4,7 +4,6 @@
 #include <time.h>
 #include <NTPClient.h>
 #include <Adafruit_SI1145.h>
-#include <Adafruit_GPS.h>
 #include <ArduinoJson.h>
 #include <bsec.h>
 #include <MDNS_Generic.h>

@@ -1,0 +1,7 @@
+This package requires:
+* RTClib
+* Adafruit_SI1145
+* MDNS_Generic
+* ArduinoJson
+* BSEC
+* WiFiNINA

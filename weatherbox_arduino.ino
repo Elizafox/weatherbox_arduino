@@ -363,7 +363,7 @@ void client_send_weather_page(WiFiClient& client) {
   client.print(F("<p>IR light: ")); client.print(w.get_ir()); client.println(F("</p>"));
   client.print(F("<p>AQI: ")); client.print(w.get_aqi()); client.println(F("</p>"));
   client.print(F("<p>CO2 equivalent: ")); client.print(w.get_co2e()); client.println(F("</p>"));
-  client.print(F("<p>VOC breath equivalent: ")); client.print(w.get_co2e()); client.println(F("</p>"));
+  client.print(F("<p>VOC breath equivalent: ")); client.print(w.get_voce()); client.println(F("</p>"));
   client.print(F("<p>Rainfall per hour: ")); client.print(w.get_rainfall_per_hour()); client.println(F("</p>"));
 
   client.println(F("</body></html>"));
@@ -575,7 +575,7 @@ void setup() {
   time_client.update();
 
   mdns.begin(WiFi.localIP(), hostname);
-  mdns.addServiceRecord(F("Weatherbox._http"), 80, MDNSServiceTCP);
+  mdns.addServiceRecord("Weatherbox._http", 80, MDNSServiceTCP);
 
   Serial.print(F("SSID: "));
   Serial.println(WiFi.SSID());
@@ -617,8 +617,6 @@ void loop() {
     handle_web_client(client);
     Serial.println(F("Done handling web client!"));
   }
-
-  delay(10);
 }
 
 void int_anen() {

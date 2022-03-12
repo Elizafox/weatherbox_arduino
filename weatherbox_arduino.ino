@@ -76,15 +76,13 @@ static void do_error() __attribute__((noreturn)) {
 // Taken from https://www.forward.com.au/pfod/ArduinoProgramming/I2C_clear_bus/
 int I2C_clear_bus() {
   Wire.end();
-  int PIN_SDA = SDA;
-  int PIN_SCL = SCL;
 
 #if defined(TWCR) && defined(TWEN)
   TWCR &= ~(_BV(TWEN)); //Disable the Atmel 2-Wire interface so we can control the SDA and SCL pins directly
 #endif
 
-  pinMode(PIN_SDA, INPUT_PULLUP); // Make SDA (data) and SCL (clock) pins Inputs with pullup.
-  pinMode(PIN_SCL, INPUT_PULLUP);
+  pinMode(SDA, INPUT_PULLUP); // Make SDA (data) and SCL (clock) pins Inputs with pullup.
+  pinMode(SCL, INPUT_PULLUP);
 
   delay(2500);  // Wait 2.5 secs. This is strictly only necessary on the first power
   // up of the DS3231 module to allow it to initialize properly,
@@ -92,36 +90,36 @@ int I2C_clear_bus() {
   // IDE a chance to start uploaded the program
   // before existing sketch confuses the IDE by sending Serial data.
 
-  boolean SCL_LOW = (digitalRead(PIN_SCL) == LOW); // Check is SCL is Low.
+  boolean SCL_LOW = (digitalRead(SCL) == LOW); // Check is SCL is Low.
   if (SCL_LOW) { //If it is held low Arduno cannot become the I2C master.
     return 1; //I2C bus error. Could not clear SCL clock line held low
   }
 
-  boolean SDA_LOW = (digitalRead(PIN_SDA) == LOW);  // vi. Check SDA input.
+  boolean SDA_LOW = (digitalRead(SDA) == LOW);  // vi. Check SDA input.
   int clockCount = 20; // > 2x9 clock
 
   while (SDA_LOW && (clockCount > 0)) { //  vii. If SDA is Low,
     clockCount--;
     // Note: I2C bus is open collector so do NOT drive SCL or SDA high.
-    pinMode(PIN_SCL, INPUT); // release SCL pullup so that when made output it will be LOW
-    pinMode(PIN_SCL, OUTPUT); // then clock SCL Low
+    pinMode(SCL, INPUT); // release SCL pullup so that when made output it will be LOW
+    pinMode(SCL, OUTPUT); // then clock SCL Low
     delayMicroseconds(10); //  for >5uS
-    pinMode(PIN_SCL, INPUT); // release SCL LOW
-    pinMode(PIN_SCL, INPUT_PULLUP); // turn on pullup resistors again
+    pinMode(SCL, INPUT); // release SCL LOW
+    pinMode(SCL, INPUT_PULLUP); // turn on pullup resistors again
     // do not force high as slave may be holding it low for clock stretching.
     delayMicroseconds(10); //  for >5uS
     // The >5uS is so that even the slowest I2C devices are handled.
-    SCL_LOW = (digitalRead(PIN_SCL) == LOW); // Check if SCL is Low.
+    SCL_LOW = (digitalRead(SCL) == LOW); // Check if SCL is Low.
     int counter = 20;
     while (SCL_LOW && (counter > 0)) {  //  loop waiting for SCL to become High only wait 2sec.
       counter--;
       delay(100);
-      SCL_LOW = (digitalRead(PIN_SCL) == LOW);
+      SCL_LOW = (digitalRead(SCL) == LOW);
     }
     if (SCL_LOW) { // still low after 2 sec error
       return 2; // I2C bus error. Could not clear. SCL clock line held low by slave clock stretch for >2sec
     }
-    SDA_LOW = (digitalRead(PIN_SDA) == LOW); //   and check SDA input again and loop
+    SDA_LOW = (digitalRead(SDA) == LOW); //   and check SDA input again and loop
   }
   if (SDA_LOW) { // still low
     return 3; // I2C bus error. Could not clear. SDA data line held low
@@ -580,6 +578,7 @@ void setup() {
   }
 
   server.begin();
+
   time_client.begin();
   time_client.update();
 

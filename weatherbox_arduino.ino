@@ -63,6 +63,15 @@ void int_gauge();
 void request_event();
 
 
+static void do_error() __attribute__((noreturn)) {
+  bool state = false;
+  while (true) {
+    digitalWrite(LED_BUILTIN, state);
+    state = !state;
+    delay(250);
+  }
+}
+
 // Routine to unstick the bus
 // Taken from https://www.forward.com.au/pfod/ArduinoProgramming/I2C_clear_bus/
 int I2C_clear_bus() {
@@ -522,7 +531,7 @@ void setup() {
     } else if (rtn == 3) {
       Serial.println(F("SDA data line held low"));
     }
-    while (true);
+    do_error();
   }
   else { // bus clear
     // now can start Wire Arduino master
@@ -533,7 +542,7 @@ void setup() {
 
   if (!uv.begin()) {
     Serial.println(F("Didn't find Si1145 :("));
-    while (true);
+    do_error();
   }
 
   iaq_sensor.begin(BME680_I2C_ADDR_SECONDARY, Wire);
@@ -590,6 +599,9 @@ void setup() {
   Serial.print(F("signal strength (RSSI): "));
   Serial.print(rssi);
   Serial.println(F(" dBm"));
+
+  // Turn off LED
+  digitalWrite(LED_BUILTIN, 0);
 
   Serial.println(F("Weatherbox is starting..."));
 }

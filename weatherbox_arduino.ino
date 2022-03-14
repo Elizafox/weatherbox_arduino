@@ -370,7 +370,7 @@ void client_send_weather_page(WiFiClient& client) {
   client.print(F("<p>IR light: ")); client.print(w.get_ir()); client.println(F("</p>"));
   client.print(F("<p>AQI: ")); client.print(w.get_aqi()); client.println(F("</p>"));
   client.print(F("<p>CO2 equivalent: ")); client.print(w.get_co2e()); client.println(F("</p>"));
-  client.print(F("<p>VOC breath equivalent: ")); client.print(w.get_voce()); client.println(F("</p>"));
+  client.print(F("<p>VOC breath equivalent: ")); client.print(w.get_breath_voce()); client.println(F("</p>"));
   client.print(F("<p>Rainfall per hour: ")); client.print(w.get_rainfall_per_hour()); client.println(F("</p>"));
 
   client.println(F("</body></html>"));

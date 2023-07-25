@@ -30,7 +30,7 @@ static const level_deg level_deg_table[] = {
 };
 #endif
 
-// Defined for a 3.3 volt board
+// Defined for the 3.3 volt rail on an Arduino 33 IoT
 static const level_deg level_deg_table[] = {
   {79,  270},
   {137, 315},
